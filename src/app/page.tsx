@@ -139,7 +139,7 @@ export default function HomePage() {
       .channel('orders-realtime')
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'orders' },
+        { event: 'INSERT', schema: 'public', table: 'orders' },
         (payload) => {
           console.log('Realtime change:', payload)
           // 音を鳴らす
