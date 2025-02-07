@@ -1,3 +1,4 @@
+// src/app/page.tsx
 'use client'
 
 import { useState, useEffect } from 'react'
@@ -69,34 +70,51 @@ export default function HomePage() {
     )
   }
 
-  // 注文をINSERT
-  const submitOrder = async () => {
-    if (!cart.length) return
+ // 注文をINSERT
+ const submitOrder = async () => {
+  if (!cart.length) return;
 
-    // JSON形式でDBに登録するitemsを作成
-    const orderItems = cart.map((item) => ({
-      id: item.id,
-      name: item.name,
-      price: item.price,
-      quantity: item.quantity,
-    }))
-
-    const { error } = await supabase
+  try {
+    // 1. 注文をSupabaseに送信
+    const { data, error } = await supabase
       .from('orders')
       .insert({
         table_name: tableName,
         status: 'unprovided',
-        items: orderItems,
+        items: cart.map(item => ({
+          id: item.id,
+          name: item.name,
+          price: item.price,
+          quantity: item.quantity,
+        })),
       })
-    if (error) {
-      alert('注文に失敗: ' + error.message)
-      return
+      .select()
+      .single();
+
+    if (error) throw new Error(`Order error: ${error.message}`);
+    if (!data) throw new Error('No data returned from order creation');
+
+    // 2. 通知を送信
+    const notificationResponse = await fetch('/api/send-notification', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ orderId: data.id }),
+    });
+
+    if (!notificationResponse.ok) {
+      const errorData = await notificationResponse.json();
+      throw new Error(`Notification error: ${errorData.error}`);
     }
 
-    // 注文送信成功
-    alert('注文を送信しました!')
-    setCart([]) // カートクリア
+    // 3. 成功処理
+    setCart([]);
+    alert('注文が完了しました！');
+
+  } catch (error: any) {
+    console.error('Error:', error);
+    alert(`エラーが発生しました: ${error.message}`);
   }
+};
 
   const totalPrice = cart.reduce((acc, item) => acc + item.price * item.quantity, 0)
 
@@ -142,10 +160,10 @@ export default function HomePage() {
         { event: 'INSERT', schema: 'public', table: 'orders' },
         (payload) => {
           console.log('Realtime change:', payload)
-          // 音を鳴らす
-          const audio = new Audio('/sounds/notify.mp3')
-          audio.play().catch((err) => console.warn('Audio play blocked:', err))
-
+          // ↓↓↓↓ ここは削除 or コメントアウト ↓↓↓↓
+          // const audio = new Audio('/sounds/notify.mp3')
+          // audio.play().catch((err) => console.warn('Audio play blocked:', err))
+          // ↑↑↑↑ ここは削除 or コメントアウト ↑↑↑↑
           // 変更あれば再取得
           fetchOrders()
         }
@@ -352,15 +370,15 @@ function StatusBadge({ status }: { status: string }) {
     case 'unprovided':
       colorClass = 'bg-red-500'
       text = '未提供'
-      break
+      break;
     case 'provided':
       colorClass = 'bg-blue-500'
       text = '提供済み'
-      break
+      break;
     case 'paid':
       colorClass = 'bg-green-500'
       text = '会計済み'
-      break
+      break;
     default:
       colorClass = 'bg-gray-400'
       text = status || '不明'
