@@ -12,9 +12,9 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-export const metadata = {
-  title: 'Demo MobileOrder',
-  description: 'PWA Test',
+export const metadata: Metadata = {
+  title: 'Demo OrderSystem',
+  description: 'Order Management System',
 }
 
 export default function RootLayout({
@@ -23,11 +23,10 @@ export default function RootLayout({
   children: React.ReactNode
 }) {
   return (
-    <html lang="ja">
-      <head>
-        <link rel="manifest" href="/manifest.json" />
-      </head>
-      <body>{children}</body>
+    <html lang="ja" className={`${geistSans.variable} ${geistMono.variable}`}>
+      <body className={`${geistSans.className}`}>
+        {children}
+      </body>
     </html>
   )
 }

@@ -1,17 +1,17 @@
-// src/app/api/send-notification/route.ts
 import { initializeApp, cert, getApps } from 'firebase-admin/app';
 import { getMessaging } from 'firebase-admin/messaging';
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabaseAdmin';
 
-// credential情報はすべて環境変数から読み込む
+// -------------------------------
+// 環境変数をもとにしたFirebase Admin初期化
+// -------------------------------
 const firebaseConfig = {
   projectId: process.env.FIREBASE_PROJECT_ID,
   clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
   privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
 };
 
-// Firebase Admin初期化を関数化
 function initializeFirebaseAdmin() {
   if (!getApps().length) {
     try {
@@ -25,16 +25,17 @@ function initializeFirebaseAdmin() {
   }
 }
 
+// -------------------------------
+// メインの POST ハンドラ
+// -------------------------------
 export async function POST(req: NextRequest) {
   try {
-    // デバッグログを追加
     console.log('Checking Firebase Config:', {
       projectId: process.env.FIREBASE_PROJECT_ID,
       clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
       hasPrivateKey: !!process.env.FIREBASE_PRIVATE_KEY,
     });
 
-    // Firebase設定の存在確認を詳細に
     if (!process.env.FIREBASE_PROJECT_ID) {
       throw new Error('Missing FIREBASE_PROJECT_ID');
     }
@@ -45,11 +46,11 @@ export async function POST(req: NextRequest) {
       throw new Error('Missing FIREBASE_PRIVATE_KEY');
     }
 
-    // Firebase Admin初期化のデバッグ
     console.log('Initializing Firebase Admin...');
     initializeFirebaseAdmin();
     console.log('Firebase Admin initialized successfully');
 
+    // リクエスト Body から orderId を取得
     const body = await req.json();
     const { orderId } = body;
 
@@ -60,7 +61,9 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Supabaseから注文情報を取得
+    // -------------------------------
+    // 注文情報を取得
+    // -------------------------------
     const { data: order, error: orderError } = await supabaseAdmin
       .from('orders')
       .select('*')
@@ -76,13 +79,12 @@ export async function POST(req: NextRequest) {
     }
 
     if (!order) {
-      return NextResponse.json(
-        { error: 'Order not found' },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: 'Order not found' }, { status: 404 });
     }
 
-    // 全てのPOSデバイスのFCMトークンを取得
+    // -------------------------------
+    // 全POS端末の FCMトークンを取得
+    // -------------------------------
     const { data: posDevices, error: tokenError } = await supabaseAdmin
       .from('pos_devices')
       .select('fcm_token')
@@ -103,58 +105,82 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 各デバイスに通知を送信
+    // -------------------------------
+    // 重複トークンの排除
+    // -------------------------------
+    const uniqueTokens = [...new Set(posDevices.map((d) => d.fcm_token))];
+
+    // -------------------------------
+    // FCMメッセージの共通部分
+    // -------------------------------
+    const messageBase = {
+      // data フィールド: アプリ側(onMessageなど)で取り出すカスタムデータ
+      data: {
+        orderId: order.id,
+        tableName: order.table_name || '',
+        status: order.status || '',
+        // itemsをJSON文字列化
+        items: JSON.stringify(order.items || []),
+      },
+      notification: {
+        // iOS/Android両対応の「タイトル・本文」
+        title: '新しい注文',
+        body: `${order.table_name}から注文が入りました`,
+        // ※ ここでは sound は指定しない (Androidと衝突しないようにする)
+      },
+      android: {
+        // Androidの優先度
+        priority: 'high' as const,
+        // Android通知の詳細設定: チャネルやサウンド名など
+        notification: {
+          sound: 'notification_sound', // 拡張子なし
+          channelId: 'orders',
+        },
+      },
+      apns: {
+        // iOS向け APNs ペイロード
+        payload: {
+          aps: {
+            // iOS バックグラウンドで鳴らしたいカスタム音ファイル (拡張子つき)
+            // 例: ios/Runner/notification_sound.mp3 を Xcodeで Copy Bundle Resource に登録
+            sound: 'notification_sound.mp3',
+          },
+        },
+      },
+    };
+
+    // -------------------------------
+    // 各トークンに対して送信
+    // -------------------------------
     const sendResults = await Promise.allSettled(
-      posDevices.map(async (device) => {
-        if (!device.fcm_token) return null;
-
-        const message = {
-          data: {
-            orderId: order.id,
-            tableName: order.table_name || '',
-            status: order.status || '',
-            items: JSON.stringify(order.items || []),
-          },
-          notification: {
-            title: "新しい注文",
-            body: `${order.table_name}から注文が入りました`,
-          },
-          android: {
-            priority: "high" as const,
-            notification: {
-              sound: "default",
-              channelId: "orders"
-            }
-          },
-          token: device.fcm_token,
-        };
-
+      uniqueTokens.map(async (token) => {
+        if (!token) return null;
+        const message = { ...messageBase, token };
         return getMessaging().send(message);
       })
     );
 
-    // 送信結果の集計
+    // 成功・失敗カウント
     const successCount = sendResults.filter(
-      result => result.status === 'fulfilled' && result.value
+      (r) => r.status === 'fulfilled' && r.value
     ).length;
     const failureCount = sendResults.length - successCount;
 
-    // 結果を返す
     return NextResponse.json({
       success: true,
       summary: {
         total: sendResults.length,
         successful: successCount,
         failed: failureCount,
-      }
+      },
     });
-
   } catch (error: any) {
     console.error('Notification error:', error);
     return NextResponse.json(
       {
         error: error.message || 'Internal server error',
-        details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        details:
+          process.env.NODE_ENV === 'development' ? error.stack : undefined,
       },
       { status: 500 }
     );
